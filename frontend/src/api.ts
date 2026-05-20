@@ -1088,3 +1088,214 @@ export async function updatePanel(
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+
+
+// ─── Phase 3: Chapter Summary ────────────────────────────────
+
+export async function generateChapterSummary(chapterId: number): Promise<{ summary: string }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-summary`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function getChapterSummary(chapterId: number): Promise<{ summary: string }> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/summary`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateChapterSummary(chapterId: number, summary: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/summary`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ summary }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+export interface StorySummary {
+  chapter_id: number;
+  chapter_number: number;
+  title: string | null;
+  summary: string;
+}
+
+export async function listStorySummaries(storyId: number): Promise<StorySummary[]> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/summaries`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Phase 3: CharacterAppearanceEvent ───────────────────────
+
+export interface AppearanceEvent {
+  id: number;
+  character_id: number;
+  chapter_number: number;
+  description: string;
+  event_note: string | null;
+  created_at: string;
+}
+
+export async function listAppearanceEvents(storyId: number, characterId: number): Promise<AppearanceEvent[]> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/characters-library/${characterId}/appearance-events`,
+    { headers: apiHeaders() },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createAppearanceEvent(
+  storyId: number,
+  characterId: number,
+  data: { chapter_number: number; description: string; event_note?: string },
+): Promise<AppearanceEvent> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/characters-library/${characterId}/appearance-events`,
+    {
+      method: 'POST',
+      headers: apiHeaders(true),
+      body: JSON.stringify(data),
+    },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateAppearanceEvent(
+  storyId: number,
+  characterId: number,
+  eventId: number,
+  data: { chapter_number?: number; description?: string; event_note?: string },
+): Promise<AppearanceEvent> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/characters-library/${characterId}/appearance-events/${eventId}`,
+    {
+      method: 'PUT',
+      headers: apiHeaders(true),
+      body: JSON.stringify(data),
+    },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteAppearanceEvent(
+  storyId: number,
+  characterId: number,
+  eventId: number,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/characters-library/${characterId}/appearance-events/${eventId}`,
+    { method: 'DELETE', headers: apiHeaders() },
+  );
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Phase 3: PDF / CBZ Export ──────────────────────────────
+
+export function exportChapterCbz(chapterId: number): void {
+  window.open(`${BASE}/api/chapters/${chapterId}/export/cbz`, '_blank');
+}
+
+export function exportChapterPdf(chapterId: number): void {
+  window.open(`${BASE}/api/chapters/${chapterId}/export/pdf`, '_blank');
+}
+
+export function exportStoryCbz(storyId: number): void {
+  window.open(`${BASE}/api/stories/${storyId}/export/cbz`, '_blank');
+}
+
+// ─── Phase 4: Art Style & Aspect Ratio ──────────────────────
+
+export type ArtStyle = 'shonen' | 'shojo' | 'chibi' | 'ink' | 'cel' | null;
+export type AspectRatio = 'portrait' | 'landscape' | 'square' | null;
+
+export const ART_STYLE_LABELS: Record<string, string> = {
+  shonen: '少年漫',
+  shojo: '少女漫',
+  chibi: 'Q版/萌系',
+  ink: '水墨风',
+  cel: '赛璐珞',
+};
+
+export const ASPECT_RATIO_LABELS: Record<string, string> = {
+  portrait: '竖版（默认）',
+  landscape: '横版',
+  square: '单格特写',
+};
+
+export async function setChapterArtStyle(chapterId: number, artStyle: ArtStyle): Promise<Chapter> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, {
+    method: 'PATCH',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ art_style: artStyle }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function setChapterAspectRatio(chapterId: number, aspectRatio: AspectRatio): Promise<Chapter> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, {
+    method: 'PATCH',
+    headers: apiHeaders(true),
+    body: JSON.stringify({ aspect_ratio: aspectRatio }),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// ─── Phase 4: Share Token ────────────────────────────────────
+
+export interface ShareToken {
+  token: string;
+  story_id: number;
+  created_at: string;
+  expires_at: string | null;
+}
+
+export async function createShareToken(storyId: number): Promise<ShareToken> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/share-token`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function revokeShareToken(storyId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/share-token`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Phase 4: Cross-chapter Search ──────────────────────────
+
+export interface SearchHit {
+  type: 'title' | 'novel_content' | 'chat_message' | 'scenes' | 'image_prompt';
+  snippet: string;
+  context: string | null;
+}
+
+export interface SearchResult {
+  chapter_id: number;
+  chapter_number: number;
+  title: string;
+  hits: SearchHit[];
+}
+
+export async function searchStory(storyId: number, query: string): Promise<{ results: SearchResult[]; total: number }> {
+  const res = await fetch(
+    `${BASE}/api/stories/${storyId}/search?q=${encodeURIComponent(query)}`,
+    { headers: apiHeaders() },
+  );
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

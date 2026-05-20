@@ -12,6 +12,42 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-v4-flash"
 
+# ─── Art Style Presets ───────────────────────────────────────
+
+ART_STYLE_PROMPTS: dict[str, str] = {
+    "shonen": (
+        "少年漫画风格，动感十足，夸张的动作线，粗犷有力的线条，"
+        "大眼睛的热血少年形象，强烈的明暗对比，网点纹理"
+    ),
+    "shojo": (
+        "少女漫画风格，细腻柔美，大而闪亮的眼睛布满高光，"
+        "花朵与星星点缀背景，精致的服饰细节，柔和的线条，浪漫氛围"
+    ),
+    "chibi": (
+        "Q版/萌系漫画风格，2-3头身可爱比例，圆润的大头小身，"
+        "表情夸张可爱，简洁明快的线条，活泼轻松的画面氛围"
+    ),
+    "ink": (
+        "水墨漫画风格，毛笔线条，浓淡相宜的墨色，留白构图，"
+        "东方美学意境，简练洒脱的笔触，烟雾与远山的层次感"
+    ),
+    "cel": (
+        "赛璐珞动画风格，平整干净的色块填充，清晰的黑色轮廓线，"
+        "简洁的阴影（2-tone shading），日式动画经典视觉语言，"
+        "鲜艳饱和的配色，高光与反光明显"
+    ),
+}
+
+# ─── Aspect Ratio → Image Size Mapping ──────────────────────
+
+ASPECT_RATIO_SIZES: dict[str, str] = {
+    "portrait": "1024x1536",   # 竖版（默认）
+    "landscape": "1536x1024",  # 横版
+    "square": "1024x1024",     # 单格特写/正方形
+}
+
+DEFAULT_ASPECT_RATIO = "portrait"
+
 NOVEL_SYSTEM_PROMPT = """你是一位才华横溢、文笔细腻的网络小说家。用户会和你讨论小说的主题、风格、角色等。
 
 当用户要求你创作小说时，请遵循以下要求：
@@ -422,3 +458,63 @@ async def extract_locations(
     if not isinstance(result, list):
         raise ValueError("Location extraction did not return a JSON array")
     return result
+
+
+
+# ─── Phase 3: Chapter Summary ────────────────────────────────
+
+CHAPTER_SUMMARY_PROMPT = """你是一位专业的小说编辑。请为给定的这一话小说内容生成一段简洁的"前情提要"摘要。
+
+## 要求
+- 摘要长度：150-300 字
+- 包含本话的核心事件、人物行动、情感转折
+- 使用第三人称客观叙述
+- 不要剧透太多细节，保持悬念感
+- 结尾用一句话点明本话的情绪基调或关键悬念
+- 直接输出摘要正文，不要加标题或说明"""
+
+
+async def generate_chapter_summary(
+    novel_content: str,
+    chapter_number: int,
+    api_key: str | None = None,
+) -> str:
+    """Generate a concise summary for a chapter. Used as 「前情提要」for the next chapter."""
+    messages = [
+        {"role": "system", "content": CHAPTER_SUMMARY_PROMPT},
+        {
+            "role": "user",
+            "content": f"请为第{chapter_number}话的内容生成前情提要：\n\n---\n{novel_content[:8000]}\n---\n\n直接输出摘要：",
+        },
+    ]
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": 1024,
+    }
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            json=payload,
+            headers=_deepseek_auth_headers(api_key),
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def build_recap_injection(previous_summaries: list[tuple[int, str]]) -> str:
+    """Build a 「前情提要」block to inject at the start of chat history.
+
+    Args:
+        previous_summaries: list of (chapter_number, summary_text) tuples, in order.
+    Returns:
+        A formatted recap string to inject as a system/user message.
+    """
+    if not previous_summaries:
+        return ""
+    lines = ["【前情提要 — 请严格遵守以下已发生的剧情，不得矛盾或遗忘】"]
+    for ch_num, summary in previous_summaries[-5:]:  # Keep last 5 chapters max
+        lines.append(f"\n▶ 第{ch_num}话：{summary}")
+    lines.append("\n【以上是已发生的故事，请在此基础上继续创作下一话】")
+    return "\n".join(lines)

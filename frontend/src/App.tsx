@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Pencil, Check, Library } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Pencil, Check, Library, Search } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
 import AssetLibrary from './components/AssetLibrary';
+import SearchPanel from './components/SearchPanel';
 import {
   listChapters,
   listStories,
@@ -340,6 +341,7 @@ function App() {
   const [assetLibraryOpen, setAssetLibraryOpen] = useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [missingApiKeyAlert, setMissingApiKeyAlert] = useState<ApiKeyErrorDetail | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Listen for "missing API key" events emitted by api.ts and show a friendly
   // modal instead of letting the raw error bubble up to alert()/console.
@@ -743,6 +745,18 @@ function App() {
             <Library size={14} />
             资料库
           </button>
+          <button
+            onClick={() => setSearchOpen((open) => !open)}
+            className={`${isMobile ? 'hidden' : 'flex'} items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+              searchOpen
+                ? 'border-amber-600 bg-amber-600/10 text-amber-300'
+                : 'border-gray-800 bg-gray-900 text-gray-300 hover:border-amber-600 hover:text-white'
+            }`}
+            title={searchOpen ? '关闭搜索' : '跨章节搜索'}
+          >
+            <Search size={14} />
+            搜索
+          </button>
           <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} compact={isMobile} />
           <span className="truncate max-w-[180px] md:max-w-[280px]">
             第 {currentChapter?.chapter_number ?? '–'} 话
@@ -824,15 +838,28 @@ function App() {
         <main className="flex-1 flex min-h-0">
           {chapterNav}
           <div className="flex flex-1 min-w-0">
-            <div className={`${assetLibraryOpen ? 'w-[40%]' : 'w-1/2'} border-r border-gray-800`}>
+            <div className={`${assetLibraryOpen || searchOpen ? 'w-[38%]' : 'w-1/2'} border-r border-gray-800`}>
               <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
             </div>
-            <div className={`${assetLibraryOpen ? 'w-[35%]' : 'w-1/2'}`}>
+            <div className={`${assetLibraryOpen || searchOpen ? 'w-[33%]' : 'w-1/2'}`}>
               <MangaPanel chapter={currentChapter} storyId={story?.id ?? null} onChapterRefresh={refreshChapter} />
             </div>
-            {assetLibraryOpen && (
-              <div className="w-[25%] border-l border-gray-800">
+            {assetLibraryOpen && !searchOpen && (
+              <div className="w-[29%] border-l border-gray-800">
                 <AssetLibrary storyId={story?.id ?? null} />
+              </div>
+            )}
+            {searchOpen && (
+              <div className="w-[29%] border-l border-gray-800">
+                <SearchPanel
+                  storyId={story?.id ?? 0}
+                  onSelectChapter={(chapterId) => {
+                    const idx = chapters.findIndex(c => c.id === chapterId);
+                    if (idx >= 0) setCurrentIdx(idx);
+                    setSearchOpen(false);
+                  }}
+                  onClose={() => setSearchOpen(false)}
+                />
               </div>
             )}
           </div>

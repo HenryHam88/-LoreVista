@@ -1,6 +1,6 @@
 import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
@@ -21,6 +21,7 @@ class Story(Base):
     asset_groups: Mapped[list["StoryAssetGroup"]] = relationship("StoryAssetGroup", back_populates="story", order_by="StoryAssetGroup.id", cascade="all, delete-orphan")
     characters: Mapped[list["Character"]] = relationship("Character", back_populates="story", order_by="Character.sort_order", cascade="all, delete-orphan")
     locations: Mapped[list["Location"]] = relationship("Location", back_populates="story", order_by="Location.sort_order", cascade="all, delete-orphan", foreign_keys="[Location.story_id]")
+    share_tokens: Mapped[list["StoryShareToken"]] = relationship("StoryShareToken", back_populates="story", cascade="all, delete-orphan")
 
     @property
     def has_character_profiles(self) -> bool:
@@ -61,6 +62,14 @@ class Chapter(Base):
     color_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     image_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    # Phase 3: chapter summary & style presets
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AI-generated summary of this chapter's content
+    art_style: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    # Phase 4: art style preset: shonen | shojo | chibi | ink | cel
+    aspect_ratio: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Phase 4: aspect ratio: portrait | landscape | square
 
     story: Mapped["Story"] = relationship("Story", back_populates="chapters")
     asset_group: Mapped["StoryAssetGroup | None"] = relationship("StoryAssetGroup", back_populates="chapters")
@@ -121,6 +130,7 @@ class Character(Base):
 
     story: Mapped["Story"] = relationship("Story", back_populates="characters")
     outfits: Mapped[list["Outfit"]] = relationship("Outfit", back_populates="character", order_by="Outfit.sort_order", cascade="all, delete-orphan")
+    appearance_events: Mapped[list["CharacterAppearanceEvent"]] = relationship("CharacterAppearanceEvent", back_populates="character", order_by="CharacterAppearanceEvent.chapter_number", cascade="all, delete-orphan")
 
 
 class Outfit(Base):
@@ -196,3 +206,60 @@ class Panel(Base):
 
     page: Mapped["Page"] = relationship("Page", back_populates="panels")
     location: Mapped["Location | None"] = relationship("Location")
+
+
+
+# ─── Phase 3: Character Appearance Events ────────────────────
+
+
+class CharacterAppearanceEvent(Base):
+    """Records a change in a character's appearance at a specific chapter.
+
+    E.g. "Chapter 50: gets a haircut → short silver hair".
+    After this chapter_number, the new appearance description is used for prompts.
+    """
+    __tablename__ = "character_appearance_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    character_id: Mapped[int] = mapped_column(Integer, ForeignKey("characters.id"), nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Chapter number FROM which this appearance takes effect
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    # New appearance description after this event
+    event_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Human-readable note of what changed, e.g. "剪头发，现在是短银发"
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+
+    character: Mapped["Character"] = relationship("Character", back_populates="appearance_events")
+
+
+# ─── Phase 4: Story Share Token ──────────────────────────────
+
+
+class StoryShareToken(Base):
+    """Read-only public share token for a story."""
+    __tablename__ = "story_share_tokens"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    story_id: Mapped[int] = mapped_column(Integer, ForeignKey("stories.id"), nullable=False)
+    token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    story: Mapped["Story"] = relationship("Story", back_populates="share_tokens")
+
+
+# ─── Phase 4: N-pick image candidates ────────────────────────
+
+
+class ImageCandidate(Base):
+    """Stores N image candidates for a panel (N-pick feature). User picks one to keep."""
+    __tablename__ = "image_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    chapter_id: Mapped[int] = mapped_column(Integer, ForeignKey("chapters.id"), nullable=False)
+    image_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    image_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, server_default=func.now())

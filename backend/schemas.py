@@ -71,6 +71,8 @@ class StoryOut(BaseModel):
 # --- Chapter ---
 class ChapterUpdate(BaseModel):
     title: Optional[str] = None
+    art_style: Optional[str] = None
+    aspect_ratio: Optional[str] = None
 
 
 class ChapterOut(BaseModel):
@@ -81,6 +83,9 @@ class ChapterOut(BaseModel):
     novel_content: Optional[str] = None
     content_source: Optional[str] = None
     asset_group_id: Optional[int] = None
+    summary: Optional[str] = None
+    art_style: Optional[str] = None
+    aspect_ratio: Optional[str] = None
     created_at: datetime.datetime
     messages: list[ChatMessageOut] = []
     images: list[MangaImageOut] = []
@@ -280,3 +285,54 @@ class PageOut(BaseModel):
 ChapterOut.model_rebuild()
 CharacterOut.model_rebuild()
 PageOut.model_rebuild()
+
+
+
+# ─── Phase 3: Character Appearance Events ────────────────────
+
+class AppearanceEventCreate(BaseModel):
+    chapter_number: int
+    description: str
+    event_note: Optional[str] = None
+
+
+class AppearanceEventUpdate(BaseModel):
+    chapter_number: Optional[int] = None
+    description: Optional[str] = None
+    event_note: Optional[str] = None
+
+
+class AppearanceEventOut(BaseModel):
+    id: int
+    character_id: int
+    chapter_number: int
+    description: str
+    event_note: Optional[str] = None
+    created_at: datetime.datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ─── Phase 4: Share Token ────────────────────────────────────
+
+class ShareTokenOut(BaseModel):
+    token: str
+    story_id: int
+    created_at: datetime.datetime
+    expires_at: Optional[datetime.datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ─── Phase 4: Image Candidates (N-pick) ──────────────────────
+
+class ImageCandidateOut(BaseModel):
+    id: int
+    chapter_id: int
+    image_number: int
+    image_path: str
+    prompt: Optional[str] = None
+    is_selected: bool
+    created_at: datetime.datetime
+
+    model_config = {"from_attributes": True}

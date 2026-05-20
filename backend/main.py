@@ -40,6 +40,10 @@ from routers.locations import router as locations_router
 from routers.pages import router as pages_router
 from routers.migrate import router as migrate_router
 from routers.extract import router as extract_router
+from routers.summary import router as summary_router
+from routers.share import router as share_router
+from routers.search import router as search_router
+from routers.npick import router as npick_router
 
 load_dotenv()
 
@@ -75,6 +79,12 @@ app.include_router(pages_router)
 app.include_router(migrate_router)
 # Register Phase 2 routers
 app.include_router(extract_router)
+# Register Phase 3 routers
+app.include_router(summary_router)
+# Register Phase 4 routers
+app.include_router(share_router)
+app.include_router(search_router)
+app.include_router(npick_router)
 
 
 @app.exception_handler(MissingApiKeyError)
@@ -436,6 +446,9 @@ def create_next_chapter(story_id: int, db: Session = Depends(get_db)):
 
 MAX_CHAPTER_TITLE_LEN = 200
 
+VALID_ART_STYLES = {"shonen", "shojo", "chibi", "ink", "cel"}
+VALID_ASPECT_RATIOS = {"portrait", "landscape", "square"}
+
 
 @app.patch("/api/chapters/{chapter_id}", response_model=ChapterOut)
 def update_chapter(chapter_id: int, body: ChapterUpdate, db: Session = Depends(get_db)):
@@ -447,6 +460,14 @@ def update_chapter(chapter_id: int, body: ChapterUpdate, db: Session = Depends(g
         if len(title) > MAX_CHAPTER_TITLE_LEN:
             raise HTTPException(400, f"Title is too long. Max length is {MAX_CHAPTER_TITLE_LEN} characters")
         chapter.title = title or None
+    if body.art_style is not None:
+        if body.art_style and body.art_style not in VALID_ART_STYLES:
+            raise HTTPException(400, f"art_style must be one of {VALID_ART_STYLES}")
+        chapter.art_style = body.art_style or None
+    if body.aspect_ratio is not None:
+        if body.aspect_ratio and body.aspect_ratio not in VALID_ASPECT_RATIOS:
+            raise HTTPException(400, f"aspect_ratio must be one of {VALID_ASPECT_RATIOS}")
+        chapter.aspect_ratio = body.aspect_ratio or None
     db.commit()
     db.refresh(chapter)
     return chapter
@@ -496,6 +517,17 @@ async def chat(chapter_id: int, body: ChatMessageIn, request: Request, db: Sessi
         .all()
     )
     history = []
+    # Phase 3: Inject 「前情提要」recap from previous chapters' summaries
+    from services.deepseek import build_recap_injection
+    previous_summaries = [
+        (ch.chapter_number, ch.summary)
+        for ch in all_chapters
+        if ch.id != chapter_id and ch.summary and ch.summary.strip()
+    ]
+    recap = build_recap_injection([(n, s) for n, s in previous_summaries])
+    if recap:
+        history.append({"role": "system", "content": recap})
+
     for ch in all_chapters:
         for m in ch.messages:
             history.append({"role": m.role, "content": m.content})
@@ -1782,6 +1814,8 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
                     ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
                     color_mode=_load_color_mode(chapter_id, db),
                     api_key=api_key,
+                    art_style=chapter.art_style if chapter else None,
+                    aspect_ratio=chapter.aspect_ratio if chapter else None,
                 )
             except Exception as img_err:
                 await job.publish("error", {"error": f"第 {i} 张生成失败: {img_err}"})
@@ -1920,6 +1954,8 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
         ref_image_paths=[str(p) for p in ref_imgs] if ref_imgs else None,
         color_mode=_load_color_mode(chapter_id, db),
         api_key=_user_image_api_key(request),
+        art_style=chapter.art_style,
+        aspect_ratio=chapter.aspect_ratio,
     )
 
     if old_img:
@@ -1949,6 +1985,121 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
         "image_path": image_path,
         "prompt": prompt,
     }
+
+
+# ─── Phase 3: PDF / CBZ Export ────────────────────────────
+
+@app.get("/api/chapters/{chapter_id}/export/cbz")
+def export_chapter_cbz(chapter_id: int, db: Session = Depends(get_db)):
+    """Export a chapter's manga images as a CBZ (Comic Book Zip) file."""
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    if not chapter.images:
+        raise HTTPException(400, "本话还没有漫画图片，无法导出")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for img in sorted(chapter.images, key=lambda i: i.image_number):
+            img_path = Path(__file__).resolve().parent / img.image_path
+            if img_path.exists():
+                zf.write(img_path, f"page_{img.image_number:03d}.png")
+
+    buf.seek(0)
+    title = chapter.title or f"第{chapter.chapter_number}话"
+    safe_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in title)
+    filename = f"chapter_{chapter.chapter_number}_{safe_title}.cbz"
+    from urllib.parse import quote as url_quote
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{filename}"; '
+            f"filename*=UTF-8''{url_quote(filename)}"
+        )
+    }
+    return StreamingResponse(buf, media_type="application/x-cbz", headers=headers)
+
+
+@app.get("/api/chapters/{chapter_id}/export/pdf")
+def export_chapter_pdf(chapter_id: int, db: Session = Depends(get_db)):
+    """Export a chapter's manga images as a PDF file (one image per page)."""
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    if not chapter.images:
+        raise HTTPException(400, "本话还没有漫画图片，无法导出")
+
+    try:
+        from PIL import Image as PILImage
+    except ImportError:
+        raise HTTPException(500, "Pillow is required for PDF export")
+
+    pages: list[PILImage.Image] = []
+    for img in sorted(chapter.images, key=lambda i: i.image_number):
+        img_path = Path(__file__).resolve().parent / img.image_path
+        if img_path.exists():
+            try:
+                pil_img = PILImage.open(img_path).convert("RGB")
+                pages.append(pil_img)
+            except Exception as exc:
+                logger.warning("Failed to open image for PDF export %s: %s", img_path, exc)
+
+    if not pages:
+        raise HTTPException(400, "找不到有效的图片文件")
+
+    buf = io.BytesIO()
+    pages[0].save(
+        buf,
+        format="PDF",
+        save_all=True,
+        append_images=pages[1:],
+        resolution=150,
+    )
+    buf.seek(0)
+
+    title = chapter.title or f"第{chapter.chapter_number}话"
+    safe_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in title)
+    filename = f"chapter_{chapter.chapter_number}_{safe_title}.pdf"
+    from urllib.parse import quote as url_quote
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{filename}"; '
+            f"filename*=UTF-8''{url_quote(filename)}"
+        )
+    }
+    return StreamingResponse(buf, media_type="application/pdf", headers=headers)
+
+
+@app.get("/api/stories/{story_id}/export/cbz")
+def export_story_cbz(story_id: int, db: Session = Depends(get_db)):
+    """Export ALL chapters of a story as a single CBZ archive."""
+    story = db.get(Story, story_id)
+    if not story:
+        raise HTTPException(404, "Story not found")
+
+    all_images = [img for ch in story.chapters for img in ch.images]
+    if not all_images:
+        raise HTTPException(400, "这本小说还没有漫画图片")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        for chapter in sorted(story.chapters, key=lambda c: c.chapter_number):
+            for img in sorted(chapter.images, key=lambda i: i.image_number):
+                img_path = Path(__file__).resolve().parent / img.image_path
+                if img_path.exists():
+                    arcname = f"chapter_{chapter.chapter_number:03d}/page_{img.image_number:03d}.png"
+                    zf.write(img_path, arcname)
+
+    buf.seek(0)
+    safe_title = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in story.title).strip("_") or f"story_{story_id}"
+    filename = f"{safe_title}_manga.cbz"
+    from urllib.parse import quote as url_quote
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{filename}"; '
+            f"filename*=UTF-8''{url_quote(filename)}"
+        )
+    }
+    return StreamingResponse(buf, media_type="application/x-cbz", headers=headers)
 
 
 if __name__ == "__main__":
