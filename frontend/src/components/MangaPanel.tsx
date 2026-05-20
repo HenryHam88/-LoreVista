@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square, LayoutGrid } from 'lucide-react';
 import {
   generateMangaStream,
   generateScenes,
@@ -30,9 +30,12 @@ import {
   type AssetGroup,
 } from '../api';
 import { genStore } from '../genStore';
+import ExtractPanel from './ExtractPanel';
+import StructuredStoryboard from './StructuredStoryboard';
 
 interface Props {
   chapter: Chapter | null;
+  storyId?: number | null;
   onChapterRefresh?: (chapterId: number) => void;
 }
 
@@ -45,7 +48,7 @@ interface ImageItem {
 type Phase = 'idle' | 'generating-scenes' | 'editing-scenes' | 'generating-images';
 const DEFAULT_IMAGE_COUNT = 10;
 
-export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
+export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [progress, setProgress] = useState({ current: 0, total: DEFAULT_IMAGE_COUNT });
   const [statusMsg, setStatusMsg] = useState('');
@@ -81,6 +84,10 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
   const chapterLoadRequestRef = useRef(0);
   const sceneAbortRef = useRef<AbortController | null>(null);
   const mangaAbortRef = useRef<Map<number, AbortController>>(new Map());
+  // Phase 2: structured storyboard view toggle
+  const [storyboardView, setStoryboardView] = useState(false);
+  // Key to force-refresh StructuredStoryboard after generation
+  const [storyboardKey, setStoryboardKey] = useState(0);
 
   // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
   const [, setStoreTick] = useState(0);
@@ -119,6 +126,7 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
     setColorModeState('bw');
     setImageCountState(DEFAULT_IMAGE_COUNT);
     setShowColorMenu(false);
+    setStoryboardView(false);
     // Load existing scenes and characters if available
     if (chapter) {
       getChapterAssetGroup(chapter.id).then((r) => {
@@ -586,16 +594,34 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
             </button>
           )}
           {!generating && (phase === 'idle' || phase === 'editing-scenes') && (
-            <button
-              onClick={handleGenerateScenes}
-              disabled={!chapter || !chapter?.messages?.length}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md
-                         bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40
-                         disabled:cursor-not-allowed transition-colors"
-            >
-              <RefreshCw size={13} />
-              {scenes.length > 0 ? '重新生成分镜' : '生成分镜'}
-            </button>
+            <>
+              <button
+                onClick={handleGenerateScenes}
+                disabled={!chapter || !chapter?.messages?.length}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md
+                           bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40
+                           disabled:cursor-not-allowed transition-colors"
+              >
+                <RefreshCw size={13} />
+                {scenes.length > 0 ? '重新生成分镜' : '生成分镜'}
+              </button>
+              {/* Phase 2: Toggle structured storyboard view */}
+              {storyId && (
+                <button
+                  onClick={() => setStoryboardView(v => !v)}
+                  disabled={!chapter}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-40 ${
+                    storyboardView
+                      ? 'bg-violet-600/20 text-violet-300 border border-violet-700/50'
+                      : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                  }`}
+                  title={storyboardView ? '切换回图库视图' : '切换到结构化分镜编辑器'}
+                >
+                  <LayoutGrid size={13} />
+                  <span className="hidden md:inline">{storyboardView ? '图库' : '分镜'}</span>
+                </button>
+              )}
+            </>
           )}
           {!generating && phase === 'editing-scenes' && scenes.length > 0 && (
             <>
@@ -835,6 +861,32 @@ export default function MangaPanel({ chapter, onChapterRefresh }: Props) {
                 )}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Phase 2: Extract panel (🪄 auto-extract characters/locations) */}
+        {(phase === 'idle' || phase === 'editing-scenes') && storyId && (
+          <div className="mb-4">
+            <ExtractPanel storyId={storyId} />
+          </div>
+        )}
+
+        {/* Phase 2: Structured storyboard editor */}
+        {storyboardView && chapter && storyId && (
+          <div className="mb-6">
+            <StructuredStoryboard
+              key={`${chapter.id}-${storyboardKey}`}
+              chapterId={chapter.id}
+              storyId={storyId}
+              hasMessages={!!(chapter.messages && chapter.messages.length > 0)}
+              onScenesGenerated={() => {
+                // Also refresh legacy scenes so generate-images button picks up new data
+                getScenes(chapter.id).then(s => {
+                  if (s.length > 0) { setScenes(s); setPhase('editing-scenes'); }
+                }).catch(() => {});
+                setStoryboardKey(k => k + 1);
+              }}
+            />
           </div>
         )}
 

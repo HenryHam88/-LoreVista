@@ -817,7 +817,7 @@ function App() {
             />
           </div>
           <div className={`h-full ${mobileTab === 'manga' ? '' : 'hidden'}`}>
-            <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+            <MangaPanel chapter={currentChapter} storyId={story?.id ?? null} onChapterRefresh={refreshChapter} />
           </div>
         </main>
       ) : (
@@ -828,7 +828,7 @@ function App() {
               <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
             </div>
             <div className={`${assetLibraryOpen ? 'w-[35%]' : 'w-1/2'}`}>
-              <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
+              <MangaPanel chapter={currentChapter} storyId={story?.id ?? null} onChapterRefresh={refreshChapter} />
             </div>
             {assetLibraryOpen && (
               <div className="w-[25%] border-l border-gray-800">
