@@ -49,6 +49,7 @@ class Chapter(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     story_id: Mapped[int] = mapped_column(Integer, ForeignKey("stories.id"), nullable=False)
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     novel_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     scenes_text: Mapped[str | None] = mapped_column(Text, nullable=True)

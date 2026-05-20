@@ -9,12 +9,21 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/manga_novel")
+# Default to SQLite for zero-config local dev. Set DATABASE_URL=postgresql://...
+# in .env to use PostgreSQL instead.
+DEFAULT_SQLITE_PATH = Path(__file__).resolve().parent / "lorevista.db"
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{DEFAULT_SQLITE_PATH}")
 BASE_DIR = Path(__file__).resolve().parent
 
 logger = logging.getLogger("database")
 
-engine = create_engine(DATABASE_URL, echo=False)
+# SQLite needs check_same_thread=False because FastAPI runs requests in a
+# threadpool. Other databases ignore the connect_args.
+_connect_args: dict = {}
+if DATABASE_URL.startswith("sqlite"):
+    _connect_args["check_same_thread"] = False
+
+engine = create_engine(DATABASE_URL, echo=False, connect_args=_connect_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -53,6 +62,8 @@ def _migrate():
     if "chapters" in insp.get_table_names():
         cols = {c["name"] for c in insp.get_columns("chapters")}
         with engine.begin() as conn:
+            if "title" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN title VARCHAR(255)"))
             if "content_source" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN content_source VARCHAR(20)"))
             if "scenes_text" not in cols:
@@ -68,10 +79,11 @@ def _migrate():
             if "image_count" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN image_count INTEGER"))
         with engine.begin() as conn:
+            # Use TRIM (standard SQL); PostgreSQL btrim is dialect-specific.
             conn.execute(text("""
                 UPDATE chapters
                 SET content_source = CASE
-                    WHEN novel_content IS NOT NULL AND btrim(novel_content) <> ''
+                    WHEN novel_content IS NOT NULL AND TRIM(novel_content) <> ''
                          AND (
                             SELECT COUNT(*) FROM chat_messages
                             WHERE chat_messages.chapter_id = chapters.id

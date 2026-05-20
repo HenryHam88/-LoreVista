@@ -179,8 +179,12 @@ export default function ChatPanel({ chapter, onMessageSent, onChapterRefresh, on
     <div className="flex flex-col h-full bg-gray-950">
       {/* Header with mode tabs */}
       <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0">
+        <h2 className="text-sm font-semibold text-gray-200 tracking-wide uppercase shrink-0 truncate max-w-[60%]"
+            title={chapter?.title?.trim() ? `第 ${chapter.chapter_number} 话 · ${chapter.title.trim()}` : undefined}>
           第 {chapter?.chapter_number ?? '–'} 话
+          {chapter?.title?.trim() && (
+            <span className="ml-1.5 normal-case font-normal text-gray-400">· {chapter.title.trim()}</span>
+          )}
         </h2>
         <div className="flex items-center gap-1 bg-gray-900 rounded-lg p-1 border border-gray-800">
           <button
