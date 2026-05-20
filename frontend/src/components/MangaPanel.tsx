@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square, LayoutGrid } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, ImageIcon, Loader2, Sparkles, Pencil, RefreshCw, Check, X, ImagePlus, Trash2, Square, LayoutGrid, BookOpen, FileDown, Palette, Proportions, Sparkle, Link2, FileText, Wand2 } from 'lucide-react';
 import {
   generateMangaStream,
   generateScenes,
@@ -18,7 +18,14 @@ import {
   setColorMode,
   getImageCount,
   setImageCount,
+  setChapterArtStyle,
+  setChapterAspectRatio,
+  generateChapterSummary,
+  exportChapterCbz,
+  exportChapterPdf,
   ALLOWED_IMAGE_COUNTS,
+  ART_STYLE_LABELS,
+  ASPECT_RATIO_LABELS,
   mangaImageUrl,
   mangaThumbUrl,
   type Chapter,
@@ -28,8 +35,13 @@ import {
   type RefImage,
   type CharacterSource,
   type AssetGroup,
+  type ArtStyle,
+  type AspectRatio,
 } from '../api';
 import { genStore } from '../genStore';
+import ReaderModal from './ReaderModal';
+import NPickModal from './NPickModal';
+import ShareModal from './ShareModal';
 import ExtractPanel from './ExtractPanel';
 import StructuredStoryboard from './StructuredStoryboard';
 
@@ -89,6 +101,23 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
   // Key to force-refresh StructuredStoryboard after generation
   const [storyboardKey, setStoryboardKey] = useState(0);
 
+  // Phase 3 + 4: new state
+  const [readerOpen, setReaderOpen] = useState(false);
+  const [readerInitialImage, setReaderInitialImage] = useState(1);
+  const [artStyle, setArtStyleState] = useState<ArtStyle>(null);
+  const [aspectRatio, setAspectRatioState] = useState<AspectRatio>(null);
+  const [summaryGenerating, setSummaryGenerating] = useState(false);
+  const [summaryText, setSummaryText] = useState('');
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+  const [npickOpen, setNpickOpen] = useState(false);
+  const [npickImageNumber, setNpickImageNumber] = useState(1);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [showStyleMenu, setShowStyleMenu] = useState(false);
+  const styleMenuRef = useRef<HTMLDivElement>(null);
+  const [showRatioMenu, setShowRatioMenu] = useState(false);
+  const ratioMenuRef = useRef<HTMLDivElement>(null);
+
   // Subscribe to module-level generation store so we re-render when any chapter's gen state changes
   const [, setStoreTick] = useState(0);
   useEffect(() => genStore.subscribe(() => setStoreTick((t) => t + 1)), []);
@@ -127,8 +156,19 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
     setImageCountState(DEFAULT_IMAGE_COUNT);
     setShowColorMenu(false);
     setStoryboardView(false);
+    setReaderOpen(false);
+    setNpickOpen(false);
+    setShareOpen(false);
+    setSummaryText('');
+    setSummaryGenerating(false);
+    setShowExportMenu(false);
+    setShowStyleMenu(false);
+    setShowRatioMenu(false);
     // Load existing scenes and characters if available
     if (chapter) {
+      // Load art_style and aspect_ratio from chapter data
+      setArtStyleState((chapter as any).art_style ?? null);
+      setAspectRatioState((chapter as any).aspect_ratio ?? null);
       getChapterAssetGroup(chapter.id).then((r) => {
         if (chapterLoadRequestRef.current !== requestId) return;
         setAssetGroups(r.groups);
@@ -333,12 +373,86 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
     return () => document.removeEventListener('mousedown', handler);
   }, [showColorMenu]);
 
+  // ── Close export menu on outside click ──
+  useEffect(() => {
+    if (!showExportMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showExportMenu]);
+
+  // ── Close style menu on outside click ──
+  useEffect(() => {
+    if (!showStyleMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (styleMenuRef.current && !styleMenuRef.current.contains(e.target as Node)) {
+        setShowStyleMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showStyleMenu]);
+
+  // ── Close ratio menu on outside click ──
+  useEffect(() => {
+    if (!showRatioMenu) return;
+    const handler = (e: MouseEvent) => {
+      if (ratioMenuRef.current && !ratioMenuRef.current.contains(e.target as Node)) {
+        setShowRatioMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showRatioMenu]);
+
   // ── Color mode selection ──
   const handleSelectColorMode = async (mode: ColorMode) => {
     if (!chapter) return;
     setShowColorMenu(false);
     await setColorMode(chapter.id, mode);
     setColorModeState(mode);
+  };
+
+  // ── Phase 4: Art style selection ──
+  const handleSelectArtStyle = async (style: ArtStyle) => {
+    if (!chapter) return;
+    setShowStyleMenu(false);
+    try {
+      await setChapterArtStyle(chapter.id, style);
+      setArtStyleState(style);
+    } catch (err: any) {
+      setErrorMsg(`设置画风失败: ${err.message}`);
+    }
+  };
+
+  // ── Phase 4: Aspect ratio selection ──
+  const handleSelectAspectRatio = async (ratio: AspectRatio) => {
+    if (!chapter) return;
+    setShowRatioMenu(false);
+    try {
+      await setChapterAspectRatio(chapter.id, ratio);
+      setAspectRatioState(ratio);
+    } catch (err: any) {
+      setErrorMsg(`设置比例失败: ${err.message}`);
+    }
+  };
+
+  // ── Phase 3: Generate chapter summary ──
+  const handleGenerateSummary = async () => {
+    if (!chapter) return;
+    setSummaryGenerating(true);
+    try {
+      const { summary } = await generateChapterSummary(chapter.id);
+      setSummaryText(summary);
+    } catch (err: any) {
+      setErrorMsg(`生成摘要失败: ${err.message}`);
+    } finally {
+      setSummaryGenerating(false);
+    }
   };
 
   // ── Image generation ──
@@ -577,20 +691,75 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
             </select>
           )}
           {hasImages && (
+            <div className="relative" ref={exportMenuRef}>
+              <button
+                onClick={() => setShowExportMenu(v => !v)}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md
+                           bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                title="导出/下载"
+              >
+                <FileDown size={13} />
+                导出
+              </button>
+              {showExportMenu && chapter && (
+                <div className="absolute right-0 top-full mt-1 w-52 rounded-lg border border-gray-700
+                                bg-gray-900 shadow-xl z-50 overflow-hidden">
+                  <button
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      displayImages.forEach((img) => {
+                        const a = document.createElement('a');
+                        a.href = mangaImageUrl(img.image_path);
+                        a.download = `panel_${img.image_number.toString().padStart(2, '0')}.png`;
+                        a.click();
+                      });
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                  >
+                    <Download size={13} />
+                    下载 PNG 图片
+                  </button>
+                  <button
+                    onClick={() => { setShowExportMenu(false); exportChapterCbz(chapter.id); }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                  >
+                    <FileDown size={13} />
+                    导出 CBZ（漫画阅读器）
+                  </button>
+                  <button
+                    onClick={() => { setShowExportMenu(false); exportChapterPdf(chapter.id); }}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                  >
+                    <FileText size={13} />
+                    导出 PDF
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Reader mode button */}
+          {hasImages && chapter && (
             <button
-              onClick={() => {
-                displayImages.forEach((img) => {
-                  const a = document.createElement('a');
-                  a.href = mangaImageUrl(img.image_path);
-                  a.download = `panel_${img.image_number.toString().padStart(2, '0')}.png`;
-                  a.click();
-                });
-              }}
+              onClick={() => { setReaderInitialImage(1); setReaderOpen(true); }}
               className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-md
-                         bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+                         bg-violet-700/40 hover:bg-violet-700 text-violet-300 border border-violet-700/50
+                         transition-colors"
+              title="全屏阅读模式"
             >
-              <Download size={13} />
-              下载
+              <BookOpen size={13} />
+              <span className="hidden md:inline">阅读</span>
+            </button>
+          )}
+          {/* Share button */}
+          {storyId && hasImages && (
+            <button
+              onClick={() => setShareOpen(true)}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md
+                         bg-gray-800 hover:bg-sky-800 text-gray-400 hover:text-sky-300
+                         transition-colors"
+              title="分享只读链接"
+            >
+              <Link2 size={13} />
             </button>
           )}
           {!generating && (phase === 'idle' || phase === 'editing-scenes') && (
@@ -662,6 +831,75 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
                       彩色漫画
                       {colorMode === 'color' && <Check size={12} className="ml-auto text-amber-400" />}
                     </button>
+                  </div>
+                )}
+              </div>
+              {/* Phase 4: Art style selector */}
+              <div className="relative" ref={styleMenuRef}>
+                <button
+                  onClick={() => setShowStyleMenu(v => !v)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    artStyle
+                      ? 'bg-purple-900/50 border border-purple-700 text-purple-300 hover:bg-purple-800'
+                      : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                  }`}
+                  title="风格预设"
+                >
+                  <Palette size={12} />
+                  <span className="hidden sm:inline">{artStyle ? ART_STYLE_LABELS[artStyle] : '风格'}</span>
+                  <ChevronDown size={11} className={`transition-transform ${showStyleMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showStyleMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50 overflow-hidden">
+                    <button
+                      onClick={() => handleSelectArtStyle(null)}
+                      className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800 ${!artStyle ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                    >
+                      默认（无预设）
+                      {!artStyle && <Check size={12} className="ml-auto text-amber-400" />}
+                    </button>
+                    {Object.entries(ART_STYLE_LABELS).map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => handleSelectArtStyle(key as ArtStyle)}
+                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800 ${artStyle === key ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                      >
+                        {label}
+                        {artStyle === key && <Check size={12} className="ml-auto text-amber-400" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {/* Phase 4: Aspect ratio selector */}
+              <div className="relative" ref={ratioMenuRef}>
+                <button
+                  onClick={() => setShowRatioMenu(v => !v)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    aspectRatio && aspectRatio !== 'portrait'
+                      ? 'bg-teal-900/50 border border-teal-700 text-teal-300 hover:bg-teal-800'
+                      : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+                  }`}
+                  title="画面比例"
+                >
+                  <Proportions size={12} />
+                  <span className="hidden sm:inline">
+                    {aspectRatio ? ASPECT_RATIO_LABELS[aspectRatio].split('（')[0] : '竖版'}
+                  </span>
+                  <ChevronDown size={11} className={`transition-transform ${showRatioMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showRatioMenu && (
+                  <div className="absolute right-0 top-full mt-1 w-44 rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50 overflow-hidden">
+                    {Object.entries(ASPECT_RATIO_LABELS).map(([key, label]) => (
+                      <button
+                        key={key}
+                        onClick={() => handleSelectAspectRatio(key as AspectRatio)}
+                        className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs transition-colors hover:bg-gray-800 ${(aspectRatio === key || (!aspectRatio && key === 'portrait')) ? 'text-amber-400 font-semibold' : 'text-gray-300'}`}
+                      >
+                        {label}
+                        {(aspectRatio === key || (!aspectRatio && key === 'portrait')) && <Check size={12} className="ml-auto text-amber-400" />}
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
@@ -871,6 +1109,38 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
           </div>
         )}
 
+        {/* Phase 3: Chapter summary card */}
+        {hasImages && (
+          <div className="mb-4 rounded-lg border border-gray-800 bg-gray-900/60 overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+                <FileText size={12} />
+                话末摘要
+                <span className="text-[10px] font-normal normal-case text-gray-600">（用于下一话前情提要）</span>
+              </span>
+              <button
+                onClick={handleGenerateSummary}
+                disabled={summaryGenerating || !chapter}
+                className="flex items-center gap-1 text-xs text-violet-400 hover:text-violet-300
+                           disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {summaryGenerating
+                  ? <><Loader2 size={11} className="animate-spin" /> 生成中…</>
+                  : <><Wand2 size={11} /> {summaryText ? '重新生成' : 'AI 生成摘要'}</>}
+              </button>
+            </div>
+            {summaryText ? (
+              <p className="px-3 py-2.5 text-xs text-gray-400 leading-relaxed whitespace-pre-wrap">
+                {summaryText}
+              </p>
+            ) : (
+              <p className="px-3 py-2.5 text-xs text-gray-600 italic">
+                点击「AI 生成摘要」，AI 会总结本话剧情，并在下一话创作时自动注入前情提要。
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Phase 2: Structured storyboard editor */}
         {storyboardView && chapter && storyId && (
           <div className="mb-6">
@@ -970,8 +1240,8 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
                   className="relative rounded-xl overflow-hidden border border-gray-800 bg-gray-900 cursor-pointer
                              hover:border-gray-600 transition-colors"
                   onClick={() => {
-                    const idx = imageIndexByNumber.get(image_number);
-                    if (idx !== undefined) setLightboxIdx(idx);
+                    setReaderInitialImage(image_number);
+                    setReaderOpen(true);
                   }}
                 >
                   <img
@@ -985,16 +1255,31 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
                     {image_number}/{imageCount}
                   </div>
                   {scenes[image_number - 1] && !isRegenerating && !generating && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRegenImage(image_number);
-                      }}
-                      className="absolute top-3 right-3 p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
-                      title="重新生成此图"
-                    >
-                      <RefreshCw size={12} />
-                    </button>
+                    <div className="absolute top-3 right-3 flex gap-1">
+                      {/* N-pick */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setNpickImageNumber(image_number);
+                          setNpickOpen(true);
+                        }}
+                        className="p-1.5 rounded-md bg-black/70 hover:bg-violet-600 text-white transition-colors"
+                        title="N选1出图（生成4张挑1张）"
+                      >
+                        <Sparkle size={12} />
+                      </button>
+                      {/* Regen single */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRegenImage(image_number);
+                        }}
+                        className="p-1.5 rounded-md bg-black/70 hover:bg-amber-500 text-white hover:text-gray-950 transition-colors"
+                        title="重新生成此图"
+                      >
+                        <RefreshCw size={12} />
+                      </button>
+                    </div>
                   )}
                   {isRegenerating && (
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -1242,6 +1527,51 @@ export default function MangaPanel({ chapter, storyId, onChapterRefresh }: Props
             </div>
           </div>
         </div>
+      )}
+
+      {/* Phase 3: Reader Modal */}
+      {readerOpen && chapter && chapter.images.length > 0 && (
+        <ReaderModal
+          chapter={chapter}
+          initialImageNumber={readerInitialImage}
+          onClose={() => setReaderOpen(false)}
+        />
+      )}
+
+      {/* Phase 4: N-pick Modal */}
+      {npickOpen && chapter && scenes[npickImageNumber - 1] && (
+        <NPickModal
+          chapterId={chapter.id}
+          imageNumber={npickImageNumber}
+          scenePrompt={scenes[npickImageNumber - 1]}
+          onConfirm={(cand) => {
+            // Update local image list
+            const newItem: ImageItem = {
+              image_number: cand.image_number,
+              image_path: cand.image_path,
+              prompt: cand.prompt || '',
+            };
+            setImages((prev) => {
+              const updated = prev.length > 0 ? [...prev] : [...existingImages];
+              const idx = updated.findIndex((i) => i.image_number === cand.image_number);
+              if (idx >= 0) updated[idx] = newItem;
+              else updated.push(newItem);
+              return updated.sort((a, b) => a.image_number - b.image_number);
+            });
+            setNpickOpen(false);
+            onChapterRefresh?.(chapter.id);
+          }}
+          onClose={() => setNpickOpen(false)}
+        />
+      )}
+
+      {/* Phase 4: Share Modal */}
+      {shareOpen && storyId && (
+        <ShareModal
+          storyId={storyId}
+          storyTitle={chapter?.title || `第 ${chapter?.chapter_number} 话`}
+          onClose={() => setShareOpen(false)}
+        />
       )}
     </div>
   );

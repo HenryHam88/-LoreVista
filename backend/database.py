@@ -78,6 +78,13 @@ def _migrate():
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN color_mode VARCHAR(20)"))
             if "image_count" not in cols:
                 conn.execute(text("ALTER TABLE chapters ADD COLUMN image_count INTEGER"))
+            # Phase 3 + 4 new columns
+            if "summary" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN summary TEXT"))
+            if "art_style" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN art_style VARCHAR(30)"))
+            if "aspect_ratio" not in cols:
+                conn.execute(text("ALTER TABLE chapters ADD COLUMN aspect_ratio VARCHAR(20)"))
         with engine.begin() as conn:
             # Use TRIM (standard SQL); PostgreSQL btrim is dialect-specific.
             conn.execute(text("""
