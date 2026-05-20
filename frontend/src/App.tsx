@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Pencil, Check } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
@@ -9,12 +9,15 @@ import {
   createNextChapter,
   deleteChapter,
   getChapter,
+  updateChapter,
   type Story,
   type Chapter,
   getApiKeySettings,
   saveApiKeySettings,
   clearApiKeySettings,
   API_KEY_CHANGE_EVENT,
+  API_KEY_ERROR_EVENT,
+  type ApiKeyErrorDetail,
   DEEPSEEK_USAGE_URL,
   IMAGE2_CONSOLE_URL,
 } from './api';
@@ -239,6 +242,92 @@ function ApiKeyButton({ onClick, compact = false }: { onClick: () => void; compa
   );
 }
 
+function MissingApiKeyModal({
+  alert,
+  onClose,
+  onOpenSettings,
+}: {
+  alert: ApiKeyErrorDetail | null;
+  onClose: () => void;
+  onOpenSettings: () => void;
+}) {
+  if (!alert) return null;
+  const provider = alert.provider;
+  // Decide what the provider is used for, so the user understands why.
+  const purpose = provider.toLowerCase().includes('deepseek')
+    ? '撰写小说正文 / 拆分镜 / 抽取人物场景'
+    : provider.toLowerCase().includes('image')
+      ? '生成漫画图片'
+      : '调用上游 AI 服务';
+  const consoleUrl = provider.toLowerCase().includes('deepseek')
+    ? DEEPSEEK_USAGE_URL
+    : provider.toLowerCase().includes('image')
+      ? IMAGE2_CONSOLE_URL
+      : null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-xl border border-gray-800 bg-gray-950 p-6 shadow-2xl"
+      >
+        <div className="flex items-start gap-3">
+          <div className="shrink-0 rounded-full bg-rose-500/10 p-2">
+            <KeyRound size={20} className="text-rose-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-semibold text-gray-100">
+              需要先配置 {provider} API Key
+            </h3>
+            <p className="mt-1 text-sm text-gray-400">
+              这一步操作要调用 {provider}（用于{purpose}），但你还没有填入 API Key。
+            </p>
+            {consoleUrl && (
+              <a
+                href={consoleUrl}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="mt-2 inline-flex items-center gap-1 text-xs text-violet-300 hover:text-violet-200"
+              >
+                打开 {provider} 控制台 / 充值
+                <ExternalLink size={12} />
+              </a>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="shrink-0 text-gray-500 hover:text-gray-200 -mr-1 -mt-1 p-1"
+          >
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800 hover:text-gray-200"
+          >
+            稍后
+          </button>
+          <button
+            onClick={() => {
+              onClose();
+              onOpenSettings();
+            }}
+            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-500"
+          >
+            去填写
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const isMobile = useIsMobile();
   const [view, setView] = useState<View>('home');
@@ -248,6 +337,32 @@ function App() {
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
   const [chapterNavOpen, setChapterNavOpen] = useState(true);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
+  const [missingApiKeyAlert, setMissingApiKeyAlert] = useState<ApiKeyErrorDetail | null>(null);
+
+  // Listen for "missing API key" events emitted by api.ts and show a friendly
+  // modal instead of letting the raw error bubble up to alert()/console.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<ApiKeyErrorDetail>).detail;
+      if (detail) setMissingApiKeyAlert(detail);
+    };
+    window.addEventListener(API_KEY_ERROR_EVENT, handler);
+    return () => window.removeEventListener(API_KEY_ERROR_EVENT, handler);
+  }, []);
+
+  // When the user successfully saves a key, dismiss any open missing-key alert.
+  useEffect(() => {
+    const onChange = () => {
+      const s = getApiKeySettings();
+      if (!missingApiKeyAlert) return;
+      const provider = missingApiKeyAlert.provider.toLowerCase();
+      if ((provider.includes('deepseek') && s.deepseekApiKey) || (provider.includes('image') && s.imageApiKey)) {
+        setMissingApiKeyAlert(null);
+      }
+    };
+    window.addEventListener(API_KEY_CHANGE_EVENT, onChange);
+    return () => window.removeEventListener(API_KEY_CHANGE_EVENT, onChange);
+  }, [missingApiKeyAlert]);
 
   const persistSelectedChapter = (chapter: Chapter | null | undefined) => {
     if (!chapter) return;
@@ -399,6 +514,46 @@ function App() {
     }
   };
 
+  // ─── Chapter title renaming ──────────────────────────
+  const [renamingChapterId, setRenamingChapterId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
+  const startRename = (chapter: Chapter) => {
+    setRenamingChapterId(chapter.id);
+    setRenameDraft(chapter.title || '');
+    // Focus the input on next tick so it exists in the DOM.
+    setTimeout(() => renameInputRef.current?.focus(), 0);
+  };
+
+  const cancelRename = () => {
+    setRenamingChapterId(null);
+    setRenameDraft('');
+  };
+
+  const commitRename = async () => {
+    if (renamingChapterId == null) return;
+    const target = chapters.find((c) => c.id === renamingChapterId);
+    if (!target) {
+      cancelRename();
+      return;
+    }
+    const next = renameDraft.trim();
+    const prev = (target.title || '').trim();
+    if (next === prev) {
+      cancelRename();
+      return;
+    }
+    try {
+      const updated = await updateChapter(target.id, { title: next });
+      setChapters((list) => list.map((c) => (c.id === target.id ? { ...c, title: updated.title ?? null } : c)));
+    } catch (err) {
+      alert(`重命名失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      cancelRename();
+    }
+  };
+
   useEffect(() => {
     if (view !== 'editor') return;
     const onHashChange = () => {
@@ -423,21 +578,89 @@ function App() {
         <div className="flex-1 overflow-y-auto p-2">
           {chapters.map((chapter, idx) => {
             const active = chapter.id === currentChapter?.id;
+            const isRenaming = renamingChapterId === chapter.id;
+            const titleText = (chapter.title || '').trim();
+            const statusText = chapter.novel_content ? '已有正文' : chapter.messages.length ? '创作中' : '未开始';
             return (
-              <button
+              <div
                 key={chapter.id}
-                onClick={() => setCurrentIdx(idx)}
-                className={`mb-1 w-full rounded-lg px-3 py-2 text-left transition-colors ${
+                className={`group mb-1 w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                   active
-                    ? 'bg-violet-600/20 text-violet-200 border border-violet-700/50'
-                    : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200 border border-transparent'
+                    ? 'bg-violet-600/20 text-violet-200 border-violet-700/50'
+                    : 'text-gray-400 hover:bg-gray-900 hover:text-gray-200 border-transparent'
                 }`}
               >
-                <div className="text-xs font-medium">第 {chapter.chapter_number} 话</div>
-                <div className="mt-0.5 truncate text-[11px] text-gray-600">
-                  {chapter.novel_content ? '已有正文' : chapter.messages.length ? '创作中' : '未开始'}
-                </div>
-              </button>
+                {isRenaming ? (
+                  // Edit mode: input + save/cancel buttons.
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs font-medium shrink-0">第 {chapter.chapter_number} 话</span>
+                    <input
+                      ref={renameInputRef}
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          commitRename();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelRename();
+                        }
+                      }}
+                      placeholder="标题（可选）"
+                      maxLength={200}
+                      className="flex-1 min-w-0 bg-gray-900 text-gray-100 text-xs rounded px-1.5 py-0.5
+                                 border border-gray-700 focus:border-violet-500 focus:outline-none"
+                    />
+                    <button
+                      onClick={commitRename}
+                      title="保存（Enter）"
+                      className="p-0.5 text-emerald-400 hover:bg-emerald-500/10 rounded"
+                    >
+                      <Check size={12} />
+                    </button>
+                    <button
+                      onClick={cancelRename}
+                      title="取消（Esc）"
+                      className="p-0.5 text-gray-400 hover:bg-gray-700 rounded"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  // Normal mode: clickable row + pencil button on hover/active.
+                  <div className="flex items-start gap-1.5">
+                    <button
+                      onClick={() => setCurrentIdx(idx)}
+                      onDoubleClick={() => startRename(chapter)}
+                      className="flex-1 min-w-0 text-left"
+                      title={titleText ? `第 ${chapter.chapter_number} 话 · ${titleText}` : `第 ${chapter.chapter_number} 话`}
+                    >
+                      <div className="text-xs font-medium truncate">
+                        第 {chapter.chapter_number} 话
+                        {titleText && <span className="text-gray-300 font-normal"> · {titleText}</span>}
+                      </div>
+                      <div className="mt-0.5 truncate text-[11px] text-gray-600">
+                        {statusText}
+                      </div>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startRename(chapter);
+                      }}
+                      title="重命名标题（双击行也可以）"
+                      className={`shrink-0 p-1 rounded transition-opacity ${
+                        active
+                          ? 'opacity-60 hover:opacity-100 hover:bg-violet-700/30'
+                          : 'opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-gray-800'
+                      }`}
+                    >
+                      <Pencil size={11} />
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -466,6 +689,11 @@ function App() {
         </div>
         <HomePage onSelectStory={enterStory} />
         <ApiKeySettingsModal open={apiKeyModalOpen} onClose={() => setApiKeyModalOpen(false)} />
+        <MissingApiKeyModal
+          alert={missingApiKeyAlert}
+          onClose={() => setMissingApiKeyAlert(null)}
+          onOpenSettings={() => setApiKeyModalOpen(true)}
+        />
       </>
     );
   }
@@ -502,12 +730,22 @@ function App() {
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
           <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} compact={isMobile} />
-          <span>第 {currentChapter?.chapter_number ?? '–'} 话</span>
+          <span className="truncate max-w-[180px] md:max-w-[280px]">
+            第 {currentChapter?.chapter_number ?? '–'} 话
+            {currentChapter?.title?.trim() && (
+              <span className="text-gray-400"> · {currentChapter.title.trim()}</span>
+            )}
+          </span>
           {!isMobile && <span>·</span>}
           {!isMobile && <span>共 {chapters.length} 话</span>}
         </div>
       </header>
       <ApiKeySettingsModal open={apiKeyModalOpen} onClose={() => setApiKeyModalOpen(false)} />
+      <MissingApiKeyModal
+        alert={missingApiKeyAlert}
+        onClose={() => setMissingApiKeyAlert(null)}
+        onOpenSettings={() => setApiKeyModalOpen(true)}
+      />
 
       {/* Mobile tab bar */}
       {isMobile && (

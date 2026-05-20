@@ -49,6 +49,59 @@ function apiHeaders(json = false): HeadersInit {
   };
 }
 
+// ─── Centralised API error handling ───────────────────────
+// The backend returns 400 with { detail, provider } when a required API key
+// is missing. We emit a window event so a top-level component can pop a
+// friendly modal instead of a raw alert.
+export const API_KEY_ERROR_EVENT = 'lorevista:missing-api-key';
+
+export interface ApiKeyErrorDetail {
+  provider: string;
+  message: string;
+}
+
+interface ApiErrorPayload {
+  detail: string;
+  provider?: string;
+  status: number;
+}
+
+async function readApiError(res: Response): Promise<ApiErrorPayload> {
+  const text = await res.text().catch(() => '');
+  let detail = text || res.statusText || `HTTP ${res.status}`;
+  let provider: string | undefined;
+  try {
+    const json = JSON.parse(text);
+    if (typeof json?.detail === 'string') detail = json.detail;
+    if (typeof json?.provider === 'string') provider = json.provider;
+  } catch {
+    // Plain-text response.
+  }
+  return { detail, provider, status: res.status };
+}
+
+function notifyMissingKey(err: ApiErrorPayload): boolean {
+  if (err.status === 400 && err.provider) {
+    try {
+      const detail: ApiKeyErrorDetail = { provider: err.provider, message: err.detail };
+      window.dispatchEvent(new CustomEvent(API_KEY_ERROR_EVENT, { detail }));
+    } catch {
+      // SSR / non-browser env — ignore.
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Convert a non-2xx Response into a thrown Error, with friendly text for missing API keys. */
+async function throwApiError(res: Response): Promise<never> {
+  const err = await readApiError(res);
+  if (notifyMissingKey(err)) {
+    throw new Error(`请先在右下角设置中填写 ${err.provider} API Key`);
+  }
+  throw new Error(err.detail);
+}
+
 export interface Story {
   id: number;
   title: string;
@@ -80,6 +133,7 @@ export interface Chapter {
   id: number;
   story_id: number;
   chapter_number: number;
+  title?: string | null;
   novel_content: string | null;
   content_source?: 'chat' | 'import' | null;
   created_at: string;
@@ -256,6 +310,16 @@ export async function deleteChapter(chapterId: number): Promise<void> {
   if (!res.ok) throw new Error(await res.text());
 }
 
+export async function updateChapter(chapterId: number, data: { title?: string }): Promise<Chapter> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}`, {
+    method: 'PATCH',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 // ─── Chat (SSE) ─────────────────────────────────────────────
 
 export function chatStream(
@@ -275,7 +339,11 @@ export function chatStream(
   })
     .then(async (res) => {
       if (!res.ok) {
-        onError(await res.text());
+        try {
+          await throwApiError(res);
+        } catch (err) {
+          onError(err instanceof Error ? err.message : String(err));
+        }
         return;
       }
       const reader = res.body?.getReader();
@@ -338,7 +406,7 @@ export async function generateNovel(chapterId: number): Promise<Chapter> {
     method: 'POST',
     headers: apiHeaders(),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwApiError(res);
   return res.json();
 }
 
@@ -356,7 +424,7 @@ export async function importNovel(chapterId: number, content: string): Promise<C
 
 export async function generateScenes(chapterId: number, signal?: AbortSignal): Promise<string[]> {
   const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-scenes`, { method: 'POST', headers: apiHeaders(), signal });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwApiError(res);
   const data = await res.json();
   return data.scenes;
 }
@@ -632,7 +700,7 @@ export async function regenerateImage(
     headers: apiHeaders(true),
     body: JSON.stringify({ prompt }),
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) await throwApiError(res);
   return res.json();
 }
 
@@ -678,7 +746,11 @@ export function generateMangaStream(
     })
       .then(async (res) => {
       if (!res.ok) {
-        onEvent({ type: 'error', data: { error: await res.text() } });
+        try {
+          await throwApiError(res);
+        } catch (err) {
+          onEvent({ type: 'error', data: { error: err instanceof Error ? err.message : String(err) } });
+        }
         return;
       }
       const reader = res.body?.getReader();

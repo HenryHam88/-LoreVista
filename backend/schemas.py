@@ -69,10 +69,15 @@ class StoryOut(BaseModel):
 
 
 # --- Chapter ---
+class ChapterUpdate(BaseModel):
+    title: Optional[str] = None
+
+
 class ChapterOut(BaseModel):
     id: int
     story_id: int
     chapter_number: int
+    title: Optional[str] = None
     novel_content: Optional[str] = None
     content_source: Optional[str] = None
     asset_group_id: Optional[int] = None

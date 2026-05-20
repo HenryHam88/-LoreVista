@@ -24,6 +24,7 @@ from database import SessionLocal, get_db, init_db
 from models import Chapter, ChatMessage, MangaImage, Story, StoryAssetGroup
 from schemas import (
     ChapterOut,
+    ChapterUpdate,
     ChatMessageIn,
     ChatMessageOut,
     MangaImageOut,
@@ -272,18 +273,6 @@ def _decode_png_upload(b64: str) -> bytes:
 @app.on_event("startup")
 def on_startup():
     init_db()
-    # One-time: rename default stories
-    from database import SessionLocal
-    db = SessionLocal()
-    try:
-        for s in db.query(Story).filter(Story.title.in_(["我的第一个故事", "未命名故事"])).all():
-            if s.chapters and any(ch.messages for ch in s.chapters):
-                s.title = "转生成为暗恋公主的女仆故事"
-                s.description = "百合女仆与公主的奇幻冒险"
-            # else: leave as-is for empty stories
-        db.commit()
-    finally:
-        db.close()
 
 
 # ─── Story CRUD ─────────────────────────────────────────────
@@ -430,6 +419,24 @@ def create_next_chapter(story_id: int, db: Session = Depends(get_db)):
             logger.warning("Retrying chapter creation after database conflict: %s", exc)
 
     raise HTTPException(409, f"Could not create next chapter due to database conflict: {last_error}")
+
+
+MAX_CHAPTER_TITLE_LEN = 200
+
+
+@app.patch("/api/chapters/{chapter_id}", response_model=ChapterOut)
+def update_chapter(chapter_id: int, body: ChapterUpdate, db: Session = Depends(get_db)):
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+    if body.title is not None:
+        title = body.title.strip()
+        if len(title) > MAX_CHAPTER_TITLE_LEN:
+            raise HTTPException(400, f"Title is too long. Max length is {MAX_CHAPTER_TITLE_LEN} characters")
+        chapter.title = title or None
+    db.commit()
+    db.refresh(chapter)
+    return chapter
 
 
 @app.delete("/api/chapters/{chapter_id}")
@@ -1229,6 +1236,7 @@ def export_story(story_id: int, db: Session = Depends(get_db)):
             chapter_scenes = _load_chapter_scenes(chapter)
             chapter_manifest = {
                 "chapter_number": chapter.chapter_number,
+                "title": chapter.title or "",
                 "novel_content": chapter.novel_content or "",
                 "content_source": chapter.content_source,
                 "scenes_text": _serialize_scenes(chapter_scenes) if chapter_scenes else "",
@@ -1408,6 +1416,7 @@ async def import_story(request: Request, db: Session = Depends(get_db)):
                 chapter = Chapter(
                     story_id=story.id,
                     chapter_number=chapter_number,
+                    title=(str(chapter_data.get("title") or "").strip() or None),
                     novel_content=str(chapter_data.get("novel_content") or ""),
                     content_source=chapter_data.get("content_source"),
                     scenes_text=str(chapter_data.get("scenes_text") or ""),
