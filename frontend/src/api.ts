@@ -994,3 +994,97 @@ export async function migrateCharacterProfiles(storyId: number): Promise<Charact
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
+
+
+// ─── Phase 2: Auto-extract + Structured Storyboard ──────────
+
+export interface ExtractionResult {
+  created: { id: number; name: string; parent_id?: number | null }[];
+  merged: { id: number; name: string; matched_from: string }[];
+  skipped: { name: string; reason: string }[];
+  total_extracted: number;
+}
+
+/** Extract characters from all chapter novel texts using DeepSeek. */
+export async function extractCharacters(storyId: number): Promise<ExtractionResult> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/extract-characters`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Extract locations from all chapter novel texts using DeepSeek. */
+export async function extractLocations(storyId: number): Promise<ExtractionResult> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/extract-locations`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export interface PanelData {
+  id: number;
+  page_id: number;
+  panel_number: number;
+  description?: string | null;
+  dialogue?: string | null;
+  character_ids?: number[] | null;
+  outfit_ids?: number[] | null;
+  location_id?: number | null;
+  camera_angle?: string | null;
+  generated_image_path?: string | null;
+  generated_prompt?: string | null;
+  created_at: string;
+}
+
+export interface PageData {
+  id: number;
+  chapter_id: number;
+  page_number: number;
+  layout_hint?: string | null;
+  panels: PanelData[];
+  created_at: string;
+}
+
+/** Generate structured storyboard (Page + Panel records) for a chapter. */
+export async function generateStructuredScenes(chapterId: number): Promise<PageData[]> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/generate-structured-scenes`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Load existing structured storyboard pages for a chapter. */
+export async function getStructuredPages(chapterId: number): Promise<PageData[]> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/pages`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/** Update a single panel (e.g., edit description, swap character). */
+export async function updatePanel(
+  chapterId: number,
+  pageId: number,
+  panelId: number,
+  data: {
+    description?: string;
+    dialogue?: string;
+    character_ids?: number[];
+    outfit_ids?: number[];
+    location_id?: number | null;
+    camera_angle?: string;
+  },
+): Promise<PanelData> {
+  const res = await fetch(`${BASE}/api/chapters/${chapterId}/pages/${pageId}/panels/${panelId}`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}

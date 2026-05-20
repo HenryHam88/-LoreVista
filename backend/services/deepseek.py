@@ -49,9 +49,6 @@ def _deepseek_auth_headers(api_key: str | None = None) -> dict[str, str]:
 
 
 def _loads_json_lenient(text: str):
-    # DeepSeek occasionally returns literal newlines/control chars inside quoted
-    # strings. strict=False accepts those without treating the whole response as
-    # invalid JSON.
     return json.loads(text, strict=False)
 
 
@@ -74,43 +71,114 @@ def _extract_json_array(raw: str) -> list:
         except json.JSONDecodeError as second_error:
             raise ValueError("Scene split response was not valid JSON") from second_error
 
-def _scene_split_prompt(page_count: int = 10) -> str:
-    return f"""你是一位专业漫画分镜师。请将小说内容拆分为恰好{page_count}页漫画。
 
-## ★★★ 最重要的规则 ★★★
-- 输出JSON数组，恰好{page_count}个元素，每个元素代表一"页"（不是一"格"）
-- 每一页必须包含 **4-6 个分镜格**（最少4格，推荐5格），用【第1格】【第2格】【第3格】【第4格】…标记
-- 绝对禁止一页只有3个或更少的画面！信息量不足！
+def _extract_json_object(raw: str) -> dict:
+    """Extract the first JSON object from a string (handles markdown code fences)."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        raw = raw.strip()
+    try:
+        return _loads_json_lenient(raw)
+    except json.JSONDecodeError as first_error:
+        match = re.search(r"\{[\s\S]*\}", raw)
+        if not match:
+            raise ValueError("Response did not contain a JSON object") from first_error
+        try:
+            return _loads_json_lenient(match.group(0))
+        except json.JSONDecodeError as second_error:
+            raise ValueError("Response was not valid JSON") from second_error
 
-## 每页必须包含的内容
-- 至少4个【第N格（宽格/窄格/大宽格）】，每格描述：构图+人物+动作+表情
-- 多条对话气泡：「角色的台词」（推荐2-4条/页）
-- 音效字：唰—、铿！、嗡——、咔嚓、轰隆、噗通（动作或情绪转折场景必须有）
-- 节奏变化：远景→中景→特写交替，避免每格景别相同
 
-## 格式示例（必须严格遵守此格式，至少4格。注意：示例中的角色名仅作格式参考，你必须使用小说中实际出现的角色名和剧情）
-"第1页：【第1格（大宽格）】远景，某场景的环境全貌，光影氛围。音效：环境音。【第2格（窄格）】特写，角色A的表情和动作细节。对话气泡：「角色A的台词。」【第3格（窄格）】特写，角色B的反应。对话气泡：「角色B的台词。」【第4格（中景）】两人互动的中景画面，肢体语言和情绪表达。音效：动作音效。【第5格（大宽格）】场景转换或高潮画面，动态构图。对话气泡：「关键台词。」音效：氛围音效。"
+# ─── Structured storyboard JSON schema ──────────────────────────────────────
+#
+# Each page:
+# {
+#   "page": 1,
+#   "panels": [
+#     {
+#       "panel_number": 1,
+#       "frame_size": "大宽格",
+#       "shot_type": "远景",
+#       "character_names": ["雪奈", "林昊"],
+#       "location_name": "雪夜城堡-庭院",
+#       "action": "雪奈仰头凝视城堡，林昊站在她身后",
+#       "dialogue": [{"speaker": "雪奈", "text": "终于到了..."}],
+#       "sfx": ["嗡——"]
+#     }
+#   ]
+# }
 
-风格：日式黑白漫画，高对比度，戏剧性光影，精细线条和网点。
 
-请输出JSON数组，不要输出其他任何内容：
+def _structured_scene_split_prompt(page_count: int = 10) -> str:
+    return f"""你是一位专业漫画分镜师。请将小说内容拆分为恰好{page_count}页漫画，输出严格的 JSON 格式。
+
+## 输出格式
+输出一个 JSON 数组，恰好 {page_count} 个元素，每个元素代表一页，格式如下：
+{{
+  "page": 页码（整数，从1开始）,
+  "panels": [
+    {{
+      "panel_number": 格子编号（整数，从1开始）,
+      "frame_size": "大宽格"|"宽格"|"中格"|"窄格"|"特写格",
+      "shot_type": "远景"|"全景"|"中景"|"近景"|"特写"|"极特写",
+      "character_names": ["小说中出现的角色名，使用原文名字，可以是空数组"],
+      "location_name": "场景名称（如：学校走廊、雪夜庭院、破旧仓库），如无明显场景可为空字符串",
+      "action": "这一格的画面描述：人物动作、表情、姿势、构图",
+      "dialogue": [{{"speaker": "角色名", "text": "台词内容"}}],
+      "sfx": ["音效字，如：嗡——、铿！、唰、咔嚓，无则为空数组"]
+    }}
+  ]
+}}
+
+## 规则
+- 每页必须有 4-6 个格子（panel）
+- character_names 必须使用小说原文中的角色名（不能用"男主"、"她"等代词，用真实名字）
+- location_name 用简洁的中文描述，格式：大场景-小场景（如"魔法学院-图书馆"）
+- 每页至少一个有台词的格子（dialogue 非空）
+- 请严格输出 JSON，不要输出任何其他文字
+
+示例输出（仅格式参考，内容必须基于小说实际内容）：
 [
-  "第1页：【第1格...】...【第2格...】...【第3格...】...【第4格...】...（可选第5格）",
-  "第2页：【第1格...】...【第2格...】...【第3格...】...【第4格...】...",
-  ...
-  "第{page_count}页：【第1格...】...【第2格...】...【第3格...】...【第4格...】..."
-]"""
+  {{
+    "page": 1,
+    "panels": [
+      {{
+        "panel_number": 1,
+        "frame_size": "大宽格",
+        "shot_type": "远景",
+        "character_names": [],
+        "location_name": "魔法学院-入口",
+        "action": "黄昏下的魔法学院全景，尖塔上旗帜飘扬",
+        "dialogue": [],
+        "sfx": ["呼——"]
+      }},
+      {{
+        "panel_number": 2,
+        "frame_size": "中格",
+        "shot_type": "近景",
+        "character_names": ["艾拉"],
+        "location_name": "魔法学院-入口",
+        "action": "艾拉仰头凝视学院，眼神中充满期待",
+        "dialogue": [{{"speaker": "艾拉", "text": "终于来了..."}}],
+        "sfx": []
+      }}
+    ]
+  }}
+]
+
+请直接输出 JSON 数组，不要包含任何解释文字："""
 
 
 async def chat_stream(messages: list[dict], api_key: str | None = None) -> AsyncGenerator[str, None]:
-    """Stream chat response from DeepSeek."""
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [{"role": "system", "content": NOVEL_SYSTEM_PROMPT}] + messages,
         "stream": True,
         "max_tokens": 16384,
     }
-
     async with httpx.AsyncClient(timeout=600) as client:
         async with client.stream(
             "POST",
@@ -136,20 +204,17 @@ async def chat_stream(messages: list[dict], api_key: str | None = None) -> Async
 
 
 async def generate_novel(messages: list[dict], api_key: str | None = None) -> str:
-    """Generate a full novel chapter (non-streaming)."""
     full_messages = [{"role": "system", "content": NOVEL_SYSTEM_PROMPT}] + messages
     full_messages.append({
         "role": "user",
         "content": "请根据我们的讨论，创作这一话的完整小说内容。请直接输出小说正文。",
     })
-
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": full_messages,
         "stream": False,
         "max_tokens": 16384,
     }
-
     async with httpx.AsyncClient(timeout=600) as client:
         resp = await client.post(
             f"{DEEPSEEK_BASE_URL}/chat/completions",
@@ -161,23 +226,36 @@ async def generate_novel(messages: list[dict], api_key: str | None = None) -> st
         return data["choices"][0]["message"]["content"]
 
 
-async def split_scenes(chat_messages: list[dict], character_profiles: str = "", page_count: int = 10, api_key: str | None = None) -> list[str]:
-    """Use DeepSeek to split chat novel content into manga page descriptions."""
-    scene_prompt = _scene_split_prompt(page_count)
+async def split_scenes_structured(
+    chat_messages: list[dict],
+    character_profiles: str = "",
+    page_count: int = 10,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Split novel into structured storyboard JSON pages.
+
+    Returns a list of page dicts, each containing a 'panels' list.
+    """
+    scene_prompt = _structured_scene_split_prompt(page_count)
     if character_profiles:
-        scene_prompt += f"\n\n以下是角色外貌设定，分镜描述中必须严格匹配这些外貌特征：\n{character_profiles}"
-    messages = chat_messages + [
-        {"role": "user", "content": scene_prompt},
-    ]
+        scene_prompt += f"\n\n【角色外貌设定，分镜中必须使用这些角色的真实名字】\n{character_profiles}"
+
+    messages = chat_messages + [{"role": "user", "content": scene_prompt}]
     payload = {
         "model": DEEPSEEK_MODEL,
         "messages": [
-            {"role": "system", "content": f"你是漫画分镜专家。输出JSON数组，恰好{page_count}个元素，每个元素是一页漫画（包含4-6个分镜格，最少4格），不是单个格子。绝对不要把一个格子作为一个数组元素，也不要每页只给3个或更少的格子。"},
+            {
+                "role": "system",
+                "content": (
+                    f"你是漫画分镜专家。严格输出 JSON 数组，恰好 {page_count} 个元素，"
+                    "每个元素是一页漫画对象（含 page 和 panels 字段）。"
+                    "panels 数组每页 4-6 个格子。绝对不输出 JSON 以外的任何内容。"
+                ),
+            }
         ] + messages,
         "stream": False,
     }
-
-    async with httpx.AsyncClient(timeout=120) as client:
+    async with httpx.AsyncClient(timeout=180) as client:
         resp = await client.post(
             f"{DEEPSEEK_BASE_URL}/chat/completions",
             json=payload,
@@ -187,11 +265,160 @@ async def split_scenes(chat_messages: list[dict], character_profiles: str = "", 
         data = resp.json()
         raw = data["choices"][0]["message"]["content"]
 
-    # Extract JSON array from response. LLMs sometimes wrap valid JSON in prose,
-    # fenced code blocks, or include literal newlines inside quoted strings.
-    scenes = _extract_json_array(raw)
-    if not isinstance(scenes, list) or not all(isinstance(scene, str) for scene in scenes):
-        raise ValueError("Scene split response must be a JSON array of strings")
-    if len(scenes) != page_count:
-        raise ValueError(f"Expected {page_count} scenes, got {len(scenes)}")
-    return scenes
+    pages = _extract_json_array(raw)
+    if not isinstance(pages, list):
+        raise ValueError("Structured scene split did not return a JSON array")
+    if len(pages) != page_count:
+        raise ValueError(f"Expected {page_count} pages, got {len(pages)}")
+    return pages
+
+
+async def split_scenes(
+    chat_messages: list[dict],
+    character_profiles: str = "",
+    page_count: int = 10,
+    api_key: str | None = None,
+) -> list[str]:
+    """Legacy: return list of plain strings (one per page).
+
+    Internally calls split_scenes_structured and serialises back to strings
+    so the old generate-scenes flow still works.
+    """
+    pages = await split_scenes_structured(
+        chat_messages, character_profiles, page_count, api_key
+    )
+    result: list[str] = []
+    for page_obj in pages:
+        if isinstance(page_obj, str):
+            result.append(page_obj)
+            continue
+        panels = page_obj.get("panels", [])
+        parts: list[str] = [f"第{page_obj.get('page', len(result)+1)}页："]
+        for panel in panels:
+            pn = panel.get("panel_number", "?")
+            fs = panel.get("frame_size", "")
+            label = f"【第{pn}格（{fs}）】" if fs else f"【第{pn}格】"
+            action = panel.get("action", "")
+            chars = panel.get("character_names", [])
+            chars_str = f"出场：{'、'.join(chars)}。" if chars else ""
+            loc = panel.get("location_name", "")
+            loc_str = f"场景：{loc}。" if loc else ""
+            dlg_parts = [f"「{d['speaker']}：{d['text']}」" for d in panel.get("dialogue", [])]
+            dlg_str = " ".join(dlg_parts)
+            sfx_parts = panel.get("sfx", [])
+            sfx_str = f" 音效：{''.join(sfx_parts)}" if sfx_parts else ""
+            parts.append(f"{label}{chars_str}{loc_str}{action}{dlg_str}{sfx_str}")
+        result.append("".join(parts))
+    return result
+
+
+# ─── Auto-extract characters from novel text ─────────────────────────────────
+
+EXTRACT_CHARACTERS_PROMPT = """你是一个角色信息提取助手。请从小说文本中提取所有出现的角色信息。
+
+## 输出格式
+输出一个 JSON 数组，每个元素是一个角色对象：
+[
+  {{
+    "name": "角色的真实名字（使用小说中的原文名，不用称谓或代词）",
+    "role": "protagonist"|"supporting"|"antagonist"|"background",
+    "aliases": ["其他称呼", "绰号", "如无则为空数组"],
+    "description": "外貌描述：发型、发色、眼睛、身材、衣着等视觉特征，尽量具体",
+    "core_appearance": {{
+      "hair": "发型发色描述",
+      "eyes": "眼睛颜色形状",
+      "build": "身材描述",
+      "features": "显著特征（如疤痕、眼镜等）",
+      "clothing": "常见服装"
+    }},
+    "confidence": 0.9
+  }}
+]
+
+## 规则
+- 只提取有名字或有显著描述的角色，忽略泛泛的"路人甲"
+- name 必须用原文名字（如"艾拉"而非"女主"）
+- confidence 表示你对这个角色身份的把握程度（0-1），路人写 0.5，主要角色写 0.9-1.0
+- 如果小说中没有明确名字，用文中最常用的称呼
+- aliases 包含文中的其他称呼（如"殿下"、"小姐"、"阿明"等）
+- 输出 JSON 数组，不要输出其他文字"""
+
+EXTRACT_LOCATIONS_PROMPT = """你是一个场景信息提取助手。请从小说文本中提取所有出现的场景/地点信息。
+
+## 输出格式
+输出一个 JSON 数组，每个元素是一个场景对象：
+[
+  {{
+    "name": "场景名称（简洁明确，如：魔法学院图书馆）",
+    "parent_name": "父场景名称（如：图书馆的父场景是魔法学院），如果是顶级场景则为空字符串",
+    "description": "场景的视觉描述：环境、光线、氛围、标志性物品等",
+    "confidence": 0.9
+  }}
+]
+
+## 规则
+- 只提取有实质描述的场景，忽略极简一笔带过的
+- name 用简洁的中文，格式建议：大场所-具体位置（如：皇宫-御花园）
+- parent_name 用于建立层级关系，如"皇宫"是"皇宫-御花园"的父场景
+- 同一个场景不要重复提取
+- 输出 JSON 数组，不要输出其他文字"""
+
+
+async def extract_characters(
+    novel_text: str,
+    existing_names: list[str] | None = None,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Extract characters from novel text, returning structured JSON list."""
+    extra = ""
+    if existing_names:
+        extra = f"\n\n【已有角色库（这些角色已存在，请合并观察而非重复创建）】：{', '.join(existing_names)}"
+
+    messages = [
+        {"role": "system", "content": EXTRACT_CHARACTERS_PROMPT},
+        {"role": "user", "content": f"请从以下小说文本中提取角色信息：{extra}\n\n---\n{novel_text}\n---\n\n输出 JSON 数组："},
+    ]
+    payload = {"model": DEEPSEEK_MODEL, "messages": messages, "stream": False}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            json=payload,
+            headers=_deepseek_auth_headers(api_key),
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+
+    result = _extract_json_array(raw)
+    if not isinstance(result, list):
+        raise ValueError("Character extraction did not return a JSON array")
+    return result
+
+
+async def extract_locations(
+    novel_text: str,
+    existing_names: list[str] | None = None,
+    api_key: str | None = None,
+) -> list[dict]:
+    """Extract locations from novel text, returning structured JSON list."""
+    extra = ""
+    if existing_names:
+        extra = f"\n\n【已有场景库（请合并已有场景，避免重复）】：{', '.join(existing_names)}"
+
+    messages = [
+        {"role": "system", "content": EXTRACT_LOCATIONS_PROMPT},
+        {"role": "user", "content": f"请从以下小说文本中提取场景信息：{extra}\n\n---\n{novel_text}\n---\n\n输出 JSON 数组："},
+    ]
+    payload = {"model": DEEPSEEK_MODEL, "messages": messages, "stream": False}
+    async with httpx.AsyncClient(timeout=120) as client:
+        resp = await client.post(
+            f"{DEEPSEEK_BASE_URL}/chat/completions",
+            json=payload,
+            headers=_deepseek_auth_headers(api_key),
+        )
+        resp.raise_for_status()
+        raw = resp.json()["choices"][0]["message"]["content"]
+
+    result = _extract_json_array(raw)
+    if not isinstance(result, list):
+        raise ValueError("Location extraction did not return a JSON array")
+    return result

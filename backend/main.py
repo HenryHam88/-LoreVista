@@ -39,6 +39,7 @@ from routers.characters import router as characters_router
 from routers.locations import router as locations_router
 from routers.pages import router as pages_router
 from routers.migrate import router as migrate_router
+from routers.extract import router as extract_router
 
 load_dotenv()
 
@@ -72,6 +73,8 @@ app.include_router(characters_router)
 app.include_router(locations_router)
 app.include_router(pages_router)
 app.include_router(migrate_router)
+# Register Phase 2 routers
+app.include_router(extract_router)
 
 
 @app.exception_handler(MissingApiKeyError)
@@ -1735,6 +1738,17 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
             for img in db.query(MangaImage).filter(MangaImage.chapter_id == chapter_id).all()
         }
 
+        # Load structured panels for this chapter (Phase 2: per-panel ref images)
+        from models import Page, Panel
+        from routers.extract import resolve_panel_refs
+        panels_by_number: dict[int, Panel] = {}
+        pages = db.query(Page).filter(Page.chapter_id == chapter_id).order_by(Page.page_number).all()
+        panel_counter = 0
+        for page in pages:
+            for panel in sorted(page.panels, key=lambda p: p.panel_number):
+                panel_counter += 1
+                panels_by_number[panel_counter] = panel
+
         for i, scene_prompt in enumerate(scenes, start=1):
             if i in existing_images:
                 img = existing_images[i]
@@ -1749,7 +1763,16 @@ async def _run_manga_generation_job(job: MangaGenerationJob, chapter_id: int, im
             await job.publish("progress", {"current": i, "total": image_count, "prompt": scene_prompt})
 
             try:
-                ref_imgs = _effective_ref_image_paths(chapter_id, db)
+                # Phase 2: try panel-specific refs first; fall back to story-level
+                panel = panels_by_number.get(i)
+                if panel and (panel.character_ids or panel.location_id):
+                    ref_imgs = resolve_panel_refs(panel, db, manga_dir)
+                    if not ref_imgs:
+                        # Panel has IDs but no images yet → use story-level fallback
+                        ref_imgs = _effective_ref_image_paths(chapter_id, db)
+                else:
+                    ref_imgs = _effective_ref_image_paths(chapter_id, db)
+
                 image_path = await generate_manga_image(
                     scene_prompt,
                     chapter_id,
@@ -1873,6 +1896,21 @@ async def regenerate_single_image(chapter_id: int, image_number: int, body: dict
 
     # Generate new image
     ref_imgs = _effective_ref_image_paths(chapter_id, db)
+    # Phase 2: use panel-level refs if available
+    from models import Page, Panel
+    from routers.extract import resolve_panel_refs
+    panels_for_num = (
+        db.query(Panel)
+        .join(Page)
+        .filter(Page.chapter_id == chapter_id)
+        .order_by(Page.page_number, Panel.panel_number)
+        .all()
+    )
+    if len(panels_for_num) >= image_number:
+        target_panel = panels_for_num[image_number - 1]
+        panel_refs = resolve_panel_refs(target_panel, db, manga_dir)
+        if panel_refs:
+            ref_imgs = panel_refs
     image_path = await generate_manga_image(
         prompt,
         chapter_id,
