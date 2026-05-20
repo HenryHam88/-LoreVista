@@ -35,6 +35,10 @@ from schemas import (
 from services.deepseek import chat_stream, generate_novel, split_scenes
 from services.errors import MissingApiKeyError
 from services.image2 import generate_manga_image
+from routers.characters import router as characters_router
+from routers.locations import router as locations_router
+from routers.pages import router as pages_router
+from routers.migrate import router as migrate_router
 
 load_dotenv()
 
@@ -62,6 +66,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register Phase 1 routers
+app.include_router(characters_router)
+app.include_router(locations_router)
+app.include_router(pages_router)
+app.include_router(migrate_router)
 
 
 @app.exception_handler(MissingApiKeyError)
