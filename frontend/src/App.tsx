@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Pencil, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, BookOpenText, Trash2, Home, MessageSquare, Image, PanelLeftClose, PanelLeftOpen, KeyRound, ExternalLink, X, Pencil, Check, Library } from 'lucide-react';
 import ChatPanel from './components/ChatPanel';
 import MangaPanel from './components/MangaPanel';
 import HomePage from './components/HomePage';
+import AssetLibrary from './components/AssetLibrary';
 import {
   listChapters,
   listStories,
@@ -336,6 +337,7 @@ function App() {
   const [currentIdx, _setCurrentIdx] = useState(0);
   const [mobileTab, setMobileTab] = useState<MobileTab>('chat');
   const [chapterNavOpen, setChapterNavOpen] = useState(true);
+  const [assetLibraryOpen, setAssetLibraryOpen] = useState(false);
   const [apiKeyModalOpen, setApiKeyModalOpen] = useState(false);
   const [missingApiKeyAlert, setMissingApiKeyAlert] = useState<ApiKeyErrorDetail | null>(null);
 
@@ -729,6 +731,18 @@ function App() {
           </span>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
+          <button
+            onClick={() => setAssetLibraryOpen((open) => !open)}
+            className={`${isMobile ? 'hidden' : 'flex'} items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+              assetLibraryOpen
+                ? 'border-violet-600 bg-violet-600/10 text-violet-300'
+                : 'border-gray-800 bg-gray-900 text-gray-300 hover:border-violet-600 hover:text-white'
+            }`}
+            title={assetLibraryOpen ? '关闭资料库' : '打开资料库'}
+          >
+            <Library size={14} />
+            资料库
+          </button>
           <ApiKeyButton onClick={() => setApiKeyModalOpen(true)} compact={isMobile} />
           <span className="truncate max-w-[180px] md:max-w-[280px]">
             第 {currentChapter?.chapter_number ?? '–'} 话
@@ -810,12 +824,17 @@ function App() {
         <main className="flex-1 flex min-h-0">
           {chapterNav}
           <div className="flex flex-1 min-w-0">
-            <div className="w-1/2 border-r border-gray-800">
+            <div className={`${assetLibraryOpen ? 'w-[40%]' : 'w-1/2'} border-r border-gray-800`}>
               <ChatPanel chapter={currentChapter} onMessageSent={refreshCurrentChapter} onChapterRefresh={refreshChapter} />
             </div>
-            <div className="w-1/2">
+            <div className={`${assetLibraryOpen ? 'w-[35%]' : 'w-1/2'}`}>
               <MangaPanel chapter={currentChapter} onChapterRefresh={refreshChapter} />
             </div>
+            {assetLibraryOpen && (
+              <div className="w-[25%] border-l border-gray-800">
+                <AssetLibrary storyId={story?.id ?? null} />
+              </div>
+            )}
           </div>
         </main>
       )}

@@ -812,3 +812,185 @@ export function mangaImageUrl(imagePath: string, cacheBust?: number): string {
   const url = `${BASE}/static/manga/${mangaStaticPath(imagePath)}`;
   return cacheBust ? `${url}?t=${cacheBust}` : url;
 }
+
+
+// ─── Phase 1: Structured Asset Library API ──────────────────
+
+export interface OutfitData {
+  id: number;
+  character_id: number;
+  label: string;
+  description?: string | null;
+  ref_image_path?: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface CharacterData {
+  id: number;
+  story_id: number;
+  name: string;
+  role: string;
+  aliases?: string[] | null;
+  core_appearance?: Record<string, string> | null;
+  description?: string | null;
+  avatar_path?: string | null;
+  sort_order: number;
+  outfits: OutfitData[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocationData {
+  id: number;
+  story_id: number;
+  parent_id?: number | null;
+  name: string;
+  description?: string | null;
+  ref_image_path?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ─── Characters ─────────────────────────────────────────────
+
+export async function listCharacters(storyId: number): Promise<CharacterData[]> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createCharacter(
+  storyId: number,
+  data: { name: string; role?: string; aliases?: string[]; core_appearance?: Record<string, string>; description?: string; sort_order?: number },
+): Promise<CharacterData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateCharacter(
+  storyId: number,
+  characterId: number,
+  data: { name?: string; role?: string; aliases?: string[]; core_appearance?: Record<string, string>; description?: string; sort_order?: number },
+): Promise<CharacterData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteCharacter(storyId: number, characterId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Outfits ────────────────────────────────────────────────
+
+export async function listOutfits(storyId: number, characterId: number): Promise<OutfitData[]> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}/outfits`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createOutfit(
+  storyId: number,
+  characterId: number,
+  data: { label?: string; description?: string; sort_order?: number },
+): Promise<OutfitData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}/outfits`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateOutfit(
+  storyId: number,
+  characterId: number,
+  outfitId: number,
+  data: { label?: string; description?: string; sort_order?: number },
+): Promise<OutfitData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}/outfits/${outfitId}`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteOutfit(storyId: number, characterId: number, outfitId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/characters-library/${characterId}/outfits/${outfitId}`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Locations ──────────────────────────────────────────────
+
+export async function listLocations(storyId: number): Promise<LocationData[]> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/locations`, { headers: apiHeaders() });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function createLocation(
+  storyId: number,
+  data: { name: string; parent_id?: number | null; description?: string; sort_order?: number },
+): Promise<LocationData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/locations`, {
+    method: 'POST',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateLocation(
+  storyId: number,
+  locationId: number,
+  data: { name?: string; parent_id?: number | null; description?: string; sort_order?: number },
+): Promise<LocationData> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/locations/${locationId}`, {
+    method: 'PUT',
+    headers: apiHeaders(true),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteLocation(storyId: number, locationId: number): Promise<void> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/locations/${locationId}`, {
+    method: 'DELETE',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
+// ─── Migrate character_profiles to structured library ───────
+
+export async function migrateCharacterProfiles(storyId: number): Promise<CharacterData[]> {
+  const res = await fetch(`${BASE}/api/stories/${storyId}/migrate-characters`, {
+    method: 'POST',
+    headers: apiHeaders(),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
